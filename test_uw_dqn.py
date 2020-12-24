@@ -1,5 +1,5 @@
 import os
-#os.environ["CUDA_VISIBLE_DEVICES"]="1"
+os.environ["CUDA_VISIBLE_DEVICES"]="2"
 
 import tensorflow as tf
 import numpy as np
@@ -7,14 +7,11 @@ import cv2
 import random
 import json
 
-
-
 def getaffinemaxrix(ret):
     cos = np.cos(ret[2])
     sin = np.sin(ret[2])
     return np.array([[cos, sin, ret[0] * 12 - 736 * sin - 512 * cos + 512],
          [-sin, cos, ret[1] * 12 - 736 * cos + 512 * sin + 736]])
-
 
 def image_diff(M1, M2, M1_2):
     #return (np.mean(cv2.multiply(M1, M2)) / np.mean(M1)) ** 2 * 100.
@@ -134,228 +131,154 @@ tf.compat.v1.disable_eager_execution()
 input_cam = tf.compat.v1.placeholder(tf.float32, [None, 256, 512, 3])
 input_warpedcam = tf.compat.v1.placeholder(tf.float32, [None, 256, 256, 3])
 input_globalmap = tf.compat.v1.placeholder(tf.float32, [None, 512, 512, 3])
-input_action = tf.compat.v1.placeholder(tf.float32, [None, 6])
-input_qvalue = tf.compat.v1.placeholder(tf.float32, [None, 1])
-global_step = tf.compat.v1.placeholder(tf.int64)
-
-#input_advantage_resized  = tf.compat.v1.nn.leaky_relu(input_advantage, alpha=5.0)
 
 output_unwarp = network_uw(input_cam)
 output_unwarp_softmax = tf.compat.v1.nn.softmax(output_unwarp)
 
-
 output_action = network_loc(input_warpedcam, input_globalmap)
-
-cost_action = tf.reduce_sum(tf.square(tf.reduce_sum(tf.math.multiply(input_action, output_action), axis=1, keepdims=True) - input_qvalue)) * 0.01
-
-
-learning_rate_loc = tf.compat.v1.train.exponential_decay(0.001, global_step, 10, 0.9) 
-operation_loc = tf.compat.v1.train.AdamOptimizer(learning_rate_loc).minimize(cost_action)
-
-
-image_path_list = []
-image_path_list.extend(["/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/" + x[:-8] for x in os.listdir("/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/") if x[-7:] == "cam.png"])
 
 sess = tf.compat.v1.Session()
 init = tf.compat.v1.global_variables_initializer()
 sess.run(init)
-restorer =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Unwarp' in v.name])
-restorer.restore(sess, "./log_wp_3/model_wp_2000.ckpt")
-
 saver = tf.compat.v1.train.Saver(max_to_keep=0)
-#saver.restore(sess, "./log_dqn_6/log_dqn_6_100.ckpt")
-log_file = open("log_dqn_1/log_dqn_1.txt", "wt")
+saver.restore(sess, "./log_dqn_1/log_dqn_1_1500.ckpt")
+#restorer =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Unwarp' in v.name])
+#restorer.restore(sess, "./log_wp_2/model_wp_1700.ckpt")
+
+log_file = open("test_dqn_1.txt", "wt")
 
 np.set_printoptions(suppress=True)
 np.set_printoptions(precision=8)
 
-for epoch in range(1, 3001):
-    history_local = []
-    history_global = []
-    history_action = []
-    history_qvalue = []
 
-    for play in range(30) :
-        previous_action = -1
-        previous_advantage = 0
-        realoutput = [0., 0., 0., 0., 0., 0.]
-        image_path = random.choice(image_path_list)
-        cam_image = cv2.imread(image_path + "_cam.png")
-        globalmap_image = cv2.imread(image_path + "_map.png")
+image_path_list = []
+image_path_list.extend(["/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/" + x[:-8] for x in os.listdir("/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/") if x[-8:] == "_cam.png"])
 
-        if cam_image is None or globalmap_image is None:
-            continue
-        cam_image = [cam_image.astype(np.float32) / 255.]
-        globalmap_image = globalmap_image.astype(np.float32) / 255.
 
-        if random.random() > 0.5 :
-            mirror = True
-        else:
-            mirror = False
-        if mirror :
-            cam_image[0] = cv2.flip(cam_image[0], 1)
-            globalmap_image = cv2.flip(globalmap_image, 1)
-        '''
-        with open(image_path + "_arg.txt") as f :
-            js = json.load(f)
+for image_path in image_path_list:
+    cam_image = [cv2.imread(image_path + "_cam.png").astype(np.float32) / 255.]
+    globalmap_image = cv2.imread(image_path + "_map.png").astype(np.float32) / 255.
 
-            noise_yaw = -float(js["noise_yaw"])
-            rot = float(js["yaw"]) + noise_yaw
-            noise_x = float(js["noise_x"])
-            noise_y = float(js["noise_y"]) 
+    with open(image_path + "_arg.txt") as f :
+        js = json.load(f)
 
-            cos = np.cos(-1.570796326794896619 + rot)
-            sin = np.sin(-1.570796326794896619 + rot)
-            x_noise = -noise_x * cos + noise_y * sin - 9 * np.sin(noise_yaw)
-            y_noise = -noise_x * sin - noise_y * cos - 9 * np.cos(noise_yaw)
+        noise_x = float(js["noise_x"])
+        noise_y = float(js["noise_y"])
+        yaw = float(js["yaw"])
+        noise_yaw = float(js["noise_yaw"])
 
-            if mirror:
-                x_noise = -x_noise
-                noise_yaw = -noise_yaw
-        '''
+        cos = np.cos(-1.570796327 - yaw)
+        sin = np.sin(-1.570796327 - yaw)
+        noise_lat = noise_x * cos - noise_y * sin
+        noise_lon = noise_x * sin + noise_y * cos
+   
+    ret_output_unwarp_softmax = sess.run(output_unwarp_softmax, {input_cam:cam_image})
+    warpedcam_list = ret_output_unwarp_softmax[:, :, :, 1:]
 
-        ret_output_unwarp_softmax = sess.run(output_unwarp_softmax, {input_cam:cam_image})
-        warpedcam_list = ret_output_unwarp_softmax[:, :, :, 1:]
-        cv2.imshow("unwarp_image", warpedcam_list[0])
+    cv2.imshow("cam_image", cam_image[0])
+    cv2.imshow("unwarp_image", warpedcam_list[0])
 
-        cv2.imshow("original_patch", globalmap_image[384:640, 384:640])
+    local_image_norm = cv2.GaussianBlur(warpedcam_list[0], (11, 11), 0)
+    local_image = cv2.divide(warpedcam_list[0], local_image_norm + 1.0)
+    blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)
 
-        local_image_norm = cv2.GaussianBlur(warpedcam_list[0], (11, 11), 0)
-        local_image = cv2.divide(warpedcam_list[0], local_image_norm + 0.1)
-        blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)
-        #_, blur_local_image_th = cv2.threshold(blur_local_image,0.3333333,0.3333333,cv2.THRESH_TRUNC)
-        #blur_local_image_th = blur_local_image_th * 3
+    blur_local_image_2 = cv2.multiply(blur_local_image, blur_local_image)
 
-        blur_local_image_2 = cv2.multiply(blur_local_image, blur_local_image)
-        #blur_local_image_mean = np.mean(blur_local_image_th)
 
-        globalmap_warped_image = globalmap_image
-        
-        
+    globalmap_warped_image = globalmap_image
 
-        localhistory = []
-        globalhistory = []
-        actionhistory = []
-        valuehistory = []
-        qvaluehistory = []
+    blur_global_image = cv2.GaussianBlur(globalmap_warped_image[492:748, 384:640], (61, 61), 0)
 
-        prevmaxscore = 0.
-        prevmaxstep = 0
+    score_o = image_diff(blur_local_image, blur_global_image, blur_local_image_2)
 
-        if random.random() > 0.95:
-            while True:
-                direction1 = random.randint(0, 5)
-                direction2 = random.randint(0, 5)
-                if direction1 - direction2 != 3 and direction1 - direction2 != -3:
-                    break
+    maxscore = -999999
+    maxret = [0., 0., 0.]
 
-        ret2 = [0.0, 0.0, 0.0]
-        for step in range(20):
-            global_image_norm = cv2.GaussianBlur(globalmap_warped_image[384:640, 384:640], (11, 11), 0)
-            global_image_normed = cv2.divide(globalmap_warped_image[384:640, 384:640], global_image_norm + 0.1)
-            blur_global_image = cv2.GaussianBlur(global_image_normed, (61, 61), 0)
-            #_, blur_global_image_th = cv2.threshold(blur_global_image,0.3333333,0.3333333,cv2.THRESH_TRUNC)
-            #blur_global_image_th = blur_global_image_th * 3
+    ret2 = [0.0, 0.0, 0.0]
+    for step in range(20):
+        global_patch = globalmap_warped_image[256:768, 256:768]
+        cv2.imshow("global_patch", global_patch)
+        ret_output_action = sess.run( output_action, {input_warpedcam:warpedcam_list, input_globalmap:[global_patch]})
+        print(ret_output_action)
+
+
+        maxarg = np.argmax(ret_output_action[0])
+
+        if maxarg == 0:
+            ret2[0] += 0.1
+        elif maxarg == 1:
+            ret2[0] -= 0.1
+        elif maxarg == 2:
+            ret2[1] += 0.1
+        elif maxarg == 3:
+            ret2[1] -= 0.1
+        elif maxarg == 4:
+            ret2[2] += 0.01
+        elif maxarg == 5:
+            ret2[2] -= 0.01
+
+        print("ret2 : ", ret2)
+        M = getaffinemaxrix(ret2)
+        globalmap_warped_image = cv2.warpAffine(globalmap_image, M, (1024, 1024))
+
+
+
+
+        blur_global_image = cv2.GaussianBlur(globalmap_warped_image[384:640, 384:640], (61, 61), 0)
                 
-            score = image_diff(blur_local_image, blur_global_image, blur_local_image_2)
 
-            global_patch = globalmap_warped_image[256:768, 256:768]
+        cv2.imshow("blur_local_image_th", blur_local_image_2)
+        cv2.imshow("blur_global_image_th", blur_global_image)
+        score = image_diff(blur_local_image_2, blur_global_image, blur_local_image_2)
+        print("score : ", score)
 
-
-            #cv2.imshow("global_map", global_patch)
-            #cv2.imshow("global_patch", global_patch[128:384, 128:384])
-            #cv2.waitKey(0)
-
-
-            localhistory.append(warpedcam_list[0])
-            globalhistory.append(global_patch)
-            valuehistory.append([score])
-
-            ret_output_action = sess.run(output_action, {input_warpedcam:warpedcam_list, input_globalmap:[global_patch]})
-            print(ret_output_action)
-
-            maxarg = np.argmax(ret_output_action[0])
-            qvaluehistory.append([score + ret_output_action[0][maxarg]])
-
-            if random.random() > 0.7 :
-                maxarg = random.randint(0, 5)
-
-            if maxarg == 0:
-                ret2[0] += 0.1
-            elif maxarg == 1:
-                ret2[0] -= 0.1
-            elif maxarg == 2:
-                ret2[1] += 0.1
-            elif maxarg == 3:
-                ret2[1] -= 0.1
-            elif maxarg == 4:
-                ret2[2] += 0.01
-            elif maxarg == 5:
-                ret2[2] -= 0.01
-
-            action = [0., 0., 0., 0., 0., 0.]
-            action[maxarg] =  1.0
-
-            actionhistory.append(action)
-            
-
-            M = getaffinemaxrix(ret2)
-            globalmap_warped_image = cv2.warpAffine(globalmap_image, M, (1024, 1024))
-
-
-            print("score : ", score)
-            print(ret2)
-            
-            if prevmaxscore * 1.01 < score :
-                prevmaxscore = score
-                prevmaxstep = step
-
-        if prevmaxstep < 3:
-            prevmaxstep = 3
-        elif prevmaxstep > 18:
-            prevmaxstep = 18
+        if score > maxscore :
+            maxscore = score
+            maxret[0] = ret2[0]
+            maxret[1] = ret2[1]
+            maxret[2] = ret2[2]
         
-        qvaluehistory[prevmaxstep] = valuehistory[prevmaxstep]
 
-        
-        history_local.extend(localhistory[:prevmaxstep])
-        history_global.extend(globalhistory[:prevmaxstep])
-        history_action.extend(actionhistory[:prevmaxstep])
-        history_qvalue.extend(qvaluehistory[1:prevmaxstep+1])
-        #if original_score < firstscore : 
-        #    history_qvalue.extend([[x - falsemove * 0.01 + (firstscore - original_score) / (firstbreak + 1)] for x in maxvaluehistory[1:step]])
-        #else:
-        #    history_qvalue.extend([[x - falsemove * 0.01 + (firstscore - original_score) * 3 / (firstbreak + 1)] for x in maxvaluehistory[1:step]])
+        cv2.imshow("map_patch", globalmap_warped_image[384:640, 384:640])
+
+        globalmap_copied_image = globalmap_image.copy()
+
+        cpx1 = 384 - ret2[0] * 12 - 512
+        cpx2 = 640 - ret2[0] * 12  - 512
+        cpx3 = -ret2[0] * 12 
+        cpy1 = 384 - ret2[1] * 12  - 512
+        cpy2 = 640 - ret2[1] * 12  - 512
+        cpy3 = -ret2[1] * 12 
+
+        cos = np.cos(-ret2[2])
+        sin = np.sin(-ret2[2])
+
+        tpx1 = cpx1 * cos + cpy1 * sin + 512
+        tpy1 = -cpx1 * sin + cpy1 * cos + 512
+        tpx2 = cpx1 * cos + cpy2 * sin + 512
+        tpy2 = -cpx1 * sin + cpy2 * cos + 512
+        tpx3 = cpx2 * cos + cpy2 * sin + 512
+        tpy3 = -cpx2 * sin + cpy2 * cos + 512
+        tpx4 = cpx2 * cos + cpy1 * sin + 512
+        tpy4 = -cpx2 * sin + cpy1 * cos + 512
+        outx = cpx3 * cos + cpy3 * sin + 512
+        outy = -cpx3 * sin + cpy3 * cos + 512
+
+        pts = np.array([[[tpx1, tpy1], [tpx2, tpy2], [tpx3, tpy3], [tpx4, tpy4]]], np.int32)
+        cv2.polylines(globalmap_copied_image, pts, True, (1., 1., 1), 1)
+        cv2.line(globalmap_copied_image, (int((tpx1 + tpx2 + tpx3 + tpx4) / 4), int((tpy1 + tpy2 + tpy3 + tpy4) / 4)), ( int((tpx2 + tpx3) / 2), int((tpy2 + tpy3) / 2)),  (1., 1., 1.), 1)
+
+        cv2.imshow("globalmap_copied_image", globalmap_copied_image)
+
+        cv2.waitKey(1)
 
 
+        #if ret_output_action[0][maxarg] < 0.:
+        #    break
+    
+    #ret_o = gettrajaffinematrix((noise_lat, noise_lon, noise_yaw), forwardpath, backwardpath)
+    #ret_m = gettrajaffinematrix(maxret, forwardpath, backwardpath)
+    #ret_r = gettrajaffinematrix(ret2, forwardpath, backwardpath)
 
-
-        print("final_reward : ", score)
-
-
-        log_file.write("epoch " + str(epoch) + " play " + str(play) + " final score : " + str(score) + "\n")
-
-
-        cv2.imshow("global_map", globalhistory[prevmaxstep])
-        cv2.imshow("global_patch", globalhistory[prevmaxstep][128:384, 128:384])
-
-        cv2.waitKey(10)
-
-
-    for play in range(64) :
-        dic = random.sample(range(len(history_local)), k=8)
-
-        batch_local = [history_local[r] for r in dic]
-        batch_global = [history_global[r] for r in dic]
-        batch_action = [history_action[r] for r in dic]
-        batch_qvalue = [history_qvalue[r] for r in dic]
-
-
-        _, ret2 =  sess.run((operation_loc, cost_action), {input_warpedcam:batch_local, input_globalmap:batch_global,
-            input_action:batch_action, input_qvalue:batch_qvalue, global_step:epoch})
-        
-        print("cost : ", ret2)
-        log_file.write("epoch " + str(epoch) + " play " + str(play) + " cost : " + str(ret2) + "\n")
-
-    if epoch % 100 == 0 :
-        saver.save(sess, "log_dqn_1/log_dqn_1_" + str(epoch) + ".ckpt")
+    log_file.write("result : %f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\n" % 
+        (noise_lat, noise_lon, -noise_yaw, score_o, ret2[0], ret2[1], ret2[2], score, maxret[0], maxret[1], maxret[2], maxscore))
