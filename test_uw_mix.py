@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="2"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 import tensorflow as tf
 import numpy as np
@@ -7,6 +7,25 @@ import cv2
 import random
 import json
 
+
+
+
+
+tf.compat.v1.disable_eager_execution()
+
+
+def drawmap(img, x, y, rot) :
+    color = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]
+    cos = np.cos(-1.570796327 - rot)
+    sin = np.sin(-1.570796327 - rot)
+    diff = [0., 0., 0.]
+    for lane in lines:
+        if not (lane[2] > x + 128 or lane[3] < x - 128 or lane[4] > y + 128 or lane[5] < y - 128) :
+            line = np.array([ [((pt[0] - x) * cos - (pt[1] - y) * sin) * -12 + 512, ((pt[0] - x) * sin + (pt[1] - y) * cos) * 12 + 736] for pt in lane[1] if -128 < (pt[0] - x) < 128 and -128 < (pt[1] - y) < 128 ], np.int32)
+            if len(line) >= 2:
+                cv2.polylines(img, [line], False, color[lane[0]], 2)
+
+    
 def getaffinemaxrix(ret):
     cos = np.cos(ret[2])
     sin = np.sin(ret[2])
@@ -111,163 +130,124 @@ def network_loc(input_local, input_global):
         return final_output
 
 
-tf.compat.v1.disable_eager_execution()
+def network_expect(input_data):
+    with tf.compat.v1.variable_scope('Expect'):
+
+        batch_size = 1
+        hidden_size = 128
+        num_hidden_layers = 2
+        
+        cells = []
+        for _ in range(0, num_hidden_layers):
+            cell = tf.compat.v1.nn.rnn_cell.DropoutWrapper(tf.compat.v1.nn.rnn_cell.BasicLSTMCell(hidden_size), output_keep_prob=0.9)
+            cells.append(cell)
+
+        cell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
+
+        initial_state = cell.zero_state(batch_size, tf.float32)
+
+        w_in = tf.compat.v1.Variable(tf.compat.v1.truncated_normal([3, 128], stddev=0.1), trainable=True, name="w_in")
+        w_out = tf.compat.v1.Variable(tf.compat.v1.truncated_normal([128, 3], stddev=0.1), trainable=True, name="w_out")
+
+        inputs = tf.matmul(input_data, w_in)
+        outputs_rnn, final_state = tf.compat.v1.nn.dynamic_rnn(cell, inputs, initial_state=initial_state, dtype=tf.float32)
+        outputs = tf.matmul(outputs_rnn, w_out)
+
+        return initial_state, outputs, cell, final_state
+
 input_cam = tf.compat.v1.placeholder(tf.float32, [None, 256, 512, 3])
 input_warpedcam = tf.compat.v1.placeholder(tf.float32, [None, 256, 256, 3])
 input_globalmap = tf.compat.v1.placeholder(tf.float32, [None, 512, 512, 3])
 
 output_unwarp = network_uw(input_cam)
 output_unwarp_softmax = tf.compat.v1.nn.softmax(output_unwarp)
-
 output_action = network_loc(input_warpedcam, input_globalmap)
+
+input_rnn_data = tf.compat.v1.placeholder(tf.float32, [None, 1, 3])
+input_rnn_target = tf.compat.v1.placeholder(tf.float32, [None, 1, 3])
+
+init_state, output_rnn, cell_rnn, output_rnn_state = network_expect(input_rnn_data)
+
+image_path = "/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1_test/"
+
+filenames = [x[:-8] for x in os.listdir(image_path) if x[-7:] == "cam.png"]
+filetimes = []
+for i in range(101):
+    s = "%06d" % i
+    l = [x for x in filenames if x[0:6] == s]
+    l.sort()
+    xpiece = []
+    if len(l) > 3:
+        filetimes.append(l)
+
+lines = []
+#read db
+with open("map/kcity_final.mapdb") as f :
+    js = json.load(f)
+    for edge in js["Lines"]:
+        line = np.float32(edge["line"])
+        minx = np.min(line[:, 0])
+        miny = np.min(line[:, 1])
+        maxx = np.max(line[:, 0])
+        maxy = np.max(line[:, 1])
+        if edge["type"] // 100 == 2:
+            lines.append([1, line, minx, maxx, miny, maxy])
+        elif edge["type"] // 100 == 1 or edge["type"] // 100 == 3:
+            lines.append([2, line, minx, maxx, miny, maxy])
+    for edge in js["Stops"]:
+        line = np.float32(edge["line"])
+        minx = np.min(line[:, 0])
+        miny = np.min(line[:, 1])
+        maxx = np.max(line[:, 0])
+        maxy = np.max(line[:, 1])
+        lines.append([0, line, minx, maxx, miny, maxy])
+        
 
 sess = tf.compat.v1.Session()
 init = tf.compat.v1.global_variables_initializer()
 sess.run(init)
-saver = tf.compat.v1.train.Saver(max_to_keep=0)
-saver.restore(sess, "./log_dqn_3/log_dqn_3_2000.ckpt")
-#restorer =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Unwarp' in v.name])
-#restorer.restore(sess, "./log_wp_2/model_wp_1700.ckpt")
 
-log_file = open("test_dqn_3.txt", "wt")
+saver = tf.compat.v1.train.Saver(max_to_keep=0)
+
+restorer1 =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Unwarp' in v.name or 'Localize' in v.name])
+restorer1.restore(sess, "./log_dqn_3/log_dqn_3_2000.ckpt")
+
+restorer2 =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Expect' in v.name])
+restorer2.restore(sess, "./log_rnn_2/log_rnn_10000.ckpt")
+
+log_file = open("test_mix_1.txt", "wt")
 
 np.set_printoptions(suppress=True)
 np.set_printoptions(precision=8)
 
+itr = 0
 
-image_path_list = []
-image_path_list.extend(["/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1_test/" + x[:-8] for x in os.listdir("/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1_test/") if x[-8:] == "_cam.png"])
-
-
-for image_path in image_path_list:
-    cam_image = [cv2.imread(image_path + "_cam.png").astype(np.float32) / 255.]
-    globalmap_image = cv2.imread(image_path + "_map.png").astype(np.float32) / 255.
-
-    with open(image_path + "_arg.txt") as f :
+for filelist in filetimes:
+    cur_state = sess.run(init_state)
+    cur_state = sess.run(output_rnn_state, {input_rnn_data : [[filelist[0]]], init_state : cur_state})
+    
+    with open(image_path + filelist[0] + "_arg.txt") as f :
         js = json.load(f)
 
         noise_x = float(js["noise_x"])
         noise_y = float(js["noise_y"])
         yaw = float(js["yaw"])
         noise_yaw = float(js["noise_yaw"])
+        state = [float(js["x"]), float(js["y"]), yaw]
 
         cos = np.cos(1.570796327 + yaw - noise_yaw)
         sin = np.sin(1.570796327 + yaw - noise_yaw)
         noise_lat = noise_x * cos + noise_y * sin
         noise_lon = - noise_x * sin + noise_y * cos
 
-   
-    ret_output_unwarp_softmax = sess.run(output_unwarp_softmax, {input_cam:cam_image})
-    warpedcam_list = ret_output_unwarp_softmax[:, :, :, 1:]
-
-    #cv2.imshow("cam_image", cam_image[0])
-    #cv2.imshow("unwarp_image", warpedcam_list[0])
-
-    local_image_norm = cv2.GaussianBlur(warpedcam_list[0], (11, 11), 0)
-    local_image = cv2.divide(warpedcam_list[0], local_image_norm + 1.0)
-    blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)
-
-    blur_local_image_2 = cv2.multiply(blur_local_image, blur_local_image)
 
 
-    globalmap_warped_image = globalmap_image
 
-    blur_global_image = cv2.GaussianBlur(globalmap_warped_image[492:748, 384:640], (61, 61), 0)
-
-    score_o = image_diff(blur_local_image, blur_global_image, blur_local_image_2)
-    
-    maxscore = score_o * 0.95
-    maxret = [0., 0., 0.]
-
-    ret2 = [0.0, 0.0, 0.0]
-    for step in range(20):
-        global_patch = globalmap_warped_image[256:768, 256:768]
-        #cv2.imshow("global_patch", global_patch)
-        ret_output_action = sess.run( output_action, {input_warpedcam:warpedcam_list, input_globalmap:[global_patch]})
-        #print(ret_output_action)
+    losssum = 0
+    for j in range(len(1, filelist)):
+        cur_state, res = sess.run((output_rnn_state, output_rnn), {input_rnn_data : [[filelist[j]]], init_state : cur_state})
+        print("res : " + str(res))
 
 
-        maxarg = np.argmax(ret_output_action[0])
-
-        if maxarg == 0:
-            ret2[0] += 0.1
-        elif maxarg == 1:
-            ret2[0] -= 0.1
-        elif maxarg == 2:
-            ret2[1] += 0.1
-        elif maxarg == 3:
-            ret2[1] -= 0.1
-        elif maxarg == 4:
-            ret2[2] += 0.01
-        elif maxarg == 5:
-            ret2[2] -= 0.01
-
-        M = getaffinemaxrix(ret2)
-        globalmap_warped_image = cv2.warpAffine(globalmap_image, M, (1024, 1024))
-
-
-        blur_global_image = cv2.GaussianBlur(globalmap_warped_image[384:640, 384:640], (61, 61), 0)
-        score = image_diff(blur_local_image_2, blur_global_image, blur_local_image_2)
-        if maxscore < score:
-            maxscore = score
-            maxret[0] = ret2[0]
-            maxret[1] = ret2[1]
-            maxret[2] = ret2[2]
-
-        '''
-
-        blur_global_image = cv2.GaussianBlur(globalmap_warped_image[384:640, 384:640], (61, 61), 0)
-                
-        score = image_diff(blur_local_image_2, blur_global_image, blur_local_image_2)
-        print("score : ", score)
-
-        cv2.imshow("blur_local_image_th", blur_local_image_2)
-        cv2.imshow("blur_global_image_th", blur_global_image)
-
-
-        cv2.imshow("map_patch", globalmap_warped_image[384:640, 384:640])
-
-        globalmap_copied_image = globalmap_image.copy()
-
-        cpx1 = 384 - ret2[0] * 12 - 512
-        cpx2 = 640 - ret2[0] * 12  - 512
-        cpx3 = -ret2[0] * 12 
-        cpy1 = 384 - ret2[1] * 12  - 512
-        cpy2 = 640 - ret2[1] * 12  - 512
-        cpy3 = -ret2[1] * 12 
-
-        cos = np.cos(-ret2[2])
-        sin = np.sin(-ret2[2])
-
-        tpx1 = cpx1 * cos + cpy1 * sin + 512
-        tpy1 = -cpx1 * sin + cpy1 * cos + 512
-        tpx2 = cpx1 * cos + cpy2 * sin + 512
-        tpy2 = -cpx1 * sin + cpy2 * cos + 512
-        tpx3 = cpx2 * cos + cpy2 * sin + 512
-        tpy3 = -cpx2 * sin + cpy2 * cos + 512
-        tpx4 = cpx2 * cos + cpy1 * sin + 512
-        tpy4 = -cpx2 * sin + cpy1 * cos + 512
-        outx = cpx3 * cos + cpy3 * sin + 512
-        outy = -cpx3 * sin + cpy3 * cos + 512
-
-        pts = np.array([[[tpx1, tpy1], [tpx2, tpy2], [tpx3, tpy3], [tpx4, tpy4]]], np.int32)
-        cv2.polylines(globalmap_copied_image, pts, True, (1., 1., 1), 1)
-        cv2.line(globalmap_copied_image, (int((tpx1 + tpx2 + tpx3 + tpx4) / 4), int((tpy1 + tpy2 + tpy3 + tpy4) / 4)), ( int((tpx2 + tpx3) / 2), int((tpy2 + tpy3) / 2)),  (1., 1., 1.), 1)
-
-        cv2.imshow("globalmap_copied_image", globalmap_copied_image)
-
-        cv2.waitKey(1)
-        if ret_output_action[0][maxarg] < 0.:
-            break
-        '''
-    
-    #ret_o = gettrajaffinematrix((noise_lat, noise_lon, noise_yaw), forwardpath, backwardpath)
-    #ret_m = gettrajaffinematrix(maxret, forwardpath, backwardpath)
-    #ret_r = gettrajaffinematrix(ret2, forwardpath, backwardpath)
-
-    #print("gt : ", noise_lat, noise_lon, -noise_yaw)
-    print("ret2 : ", ret2)
-
-
-    log_file.write("result : %f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\n" % 
-        (noise_lat, noise_lon, -noise_yaw, score_o, maxret[0], maxret[1], maxret[2], maxscore))
+        log_file.write("test " + str(itr) + "\t" + str(filelist[j][0]) + "\t" + str(filelist[j][1]) + "\t" + str(filelist[j][2]) + "\t" +
+            str(res[0][0][0]) + "\t" + str(res[0][0][1]) + "\t" + str(res[0][0][2]) + "\t" + "\n")

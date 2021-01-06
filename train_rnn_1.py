@@ -10,102 +10,98 @@ import json
 
 
 
-batch_size = 16
-hidden_size = 128
-num_hidden_layers = 3
 
 tf.compat.v1.disable_eager_execution()
 
-input_data = tf.compat.v1.placeholder(tf.float32, [None, 3, 3])
-input_time_onehot = tf.compat.v1.placeholder(tf.float32, [None, 3, 3])
-input_target = tf.compat.v1.placeholder(tf.float32, [None, 3, 3])
 
+def network_expect(input_data):
+    with tf.compat.v1.variable_scope('Expect'):
 
-softmax_input_w = tf.compat.v1.Variable(tf.compat.v1.random_normal(shape=[3, hidden_size]), dtype=tf.float32)
-softmax_input_b = tf.compat.v1.Variable(tf.compat.v1.random_normal(shape=[hidden_size]), dtype=tf.float32)
+        batch_size = 1
+        hidden_size = 128
+        num_hidden_layers = 2
+        
+        cells = []
+        for _ in range(0, num_hidden_layers):
+            cell = tf.compat.v1.nn.rnn_cell.DropoutWrapper(tf.compat.v1.nn.rnn_cell.BasicLSTMCell(hidden_size), output_keep_prob=0.9)
+            cells.append(cell)
 
-softmax_output_w = tf.compat.v1.Variable(tf.compat.v1.random_normal(shape=[hidden_size, 3]), dtype=tf.float32)
-softmax_output_b = tf.compat.v1.Variable(tf.compat.v1.random_normal(shape=[3]), dtype=tf.float32)
+        cell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
 
-cells = []
-for _ in range(0, num_hidden_layers):
-    cell = tf.compat.v1.nn.rnn_cell.BasicLSTMCell(hidden_size)
-    cells.append(cell)
+        initial_state = cell.zero_state(batch_size, tf.float32)
 
-cell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
+        w_in = tf.compat.v1.Variable(tf.compat.v1.truncated_normal([3, 128], stddev=0.1), trainable=True, name="w_in")
+        w_out = tf.compat.v1.Variable(tf.compat.v1.truncated_normal([128, 3], stddev=0.1), trainable=True, name="w_out")
 
-initial_state = cell.zero_state(batch_size, tf.float32)
+        inputs = tf.matmul(input_data, w_in)
+        outputs_rnn, final_state = tf.compat.v1.nn.dynamic_rnn(cell, inputs, initial_state=initial_state, dtype=tf.float32)
+        outputs = tf.matmul(outputs_rnn, w_out)
 
-inputs = tf.matmul(input_data, softmax_input_w) + softmax_input_b
-outputs_rnn, final_state = tf.compat.v1.nn.dynamic_rnn(cell, inputs, initial_state=initial_state, dtype=tf.float32)
-outputs = tf.matmul(outputs_rnn, softmax_output_w) + softmax_output_b
+        return initial_state, outputs, cell, final_state
 
-loss = tf.reduce_sum(tf.math.multiply(tf.square(outputs - input_target), input_time_onehot), axis=1)
-optimizer = tf.compat.v1.train.AdamOptimizer(0.001)
-operation = optimizer.minimize(loss)
+input_rnn_data = tf.compat.v1.placeholder(tf.float32, [None, 1, 3])
+input_rnn_target = tf.compat.v1.placeholder(tf.float32, [None, 1, 3])
 
-max_time = []
-filenames = [x[:-8] for x in os.listdir("/run/user/1000/gvfs/smb-share:server=1.233.226.215,share=data/20201014_Simulation_Result/") if x[-7:] == "cam.png"]
-for i in range(1001):
+init_state, output_rnn, cell_rnn, output_rnn_state = network_expect(input_rnn_data)
+
+loss_rnn = tf.reduce_sum(tf.square(output_rnn - input_rnn_target) * [1., 1., 100.])
+optimizer_rnn = tf.compat.v1.train.AdamOptimizer(0.001)
+operation_rnn = optimizer_rnn.minimize(loss_rnn)
+
+filenames = [x[:-8] for x in os.listdir("/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/") if x[-7:] == "cam.png"]
+filetimes = []
+for i in range(501):
     s = "%06d" % i
-    max_time.append(len([x for x in filenames if x[0:6] == s]))
-print("max_time", max_time)
+    l = [x for x in filenames if x[0:6] == s]
+    l.sort()
+    xpiece = []
+    if len(l) > 3:
+        x = None
+        y = None
+        yaw = None
+        for name in l:
+            with open("/media/user/disk1/20201223_Simulation_Result/noise_5.0_0.5+0.5_0.1/" + name + "_arg.txt") as f :
+                js = json.load(f)
+                if x is None:
+                    xpiece.append([0., 0., 0.])
+                else:
+                    xpiece.append([float(js["x"]) - x, float(js["y"]) - y, np.sin(float(js["yaw"]) - yaw)  ])
+                x = float(js["x"])
+                y = float(js["y"])
+                yaw = float(js["yaw"])
+        filetimes.append(xpiece)
+
+print(filetimes[1])
 
 sess = tf.compat.v1.Session()
 init = tf.compat.v1.global_variables_initializer()
 sess.run(init)
-#restorer =  tf.compat.v1.train.Saver(var_list=[v for v in tf.compat.v1.trainable_variables() if 'Unwarp' in v.name])
-#restorer.restore(sess, "./log_wp_3/model_wp_2000.ckpt")
+restorer =  tf.compat.v1.train.Saver()
+restorer.restore(sess, "./log_rnn_2/log_rnn_3000.ckpt")
 
 saver = tf.compat.v1.train.Saver(max_to_keep=0)
 #saver.restore(sess, "./log_dqn_6/log_dqn_6_100.ckpt")
-log_file = open("log_rnn_1/log_rnn.txt", "wt")
+log_file = open("log_rnn_2/log_rnn2.txt", "wt")
 
 np.set_printoptions(suppress=True)
 np.set_printoptions(precision=8)
 
 
-for epoch in range(1, 100001):
-    xbatch = []
-    ybatch = []
-    onehot_batch = []
-    for i in range(16):
-        xpiece = []
-        onehotpiece = []
+for epoch in range(3001, 100001):
+    xpiece = []
+    onehotpiece = []
 
-        i = 1000
-        while max_time[i] < 2:
-            i = random.randint(0, 1000)
-        start = random.randint(0, max_time[i] - 2)
-        for j in range(4):
-            if start < max_time[i]:
-                name = "%06d_%03d_arg.txt" % (i, start)
-                with open("/run/user/1000/gvfs/smb-share:server=1.233.226.215,share=data/20201014_Simulation_Result/" + name) as f :
-                    js = json.load(f)
-                    xpiece.append([float(js["x"]), float(js["y"]), float(js["yaw"])])
-                if start == max_time[i] - 1:
-                    onehotpiece.append([0.0, 0.0, 0.0])
-                else :
-                    onehotpiece.append([0.01, 0.01, 1.0])
-            else:
-                xpiece.append(xpiece[-1][:])
-                onehotpiece.append([0.0, 0.0, 0.0])
-            start += 1
-        
-        r0 =  xpiece[2][0]
-        r1 =  xpiece[2][1]
-        r2 =  xpiece[2][2]
-        for j in range(4):
-            xpiece[j][0] -= r0
-            xpiece[j][1] -= r1
-            xpiece[j][2] -= r2
-        xbatch.append(xpiece[0:3])
-        ybatch.append(xpiece[1:4])
-        onehot_batch.append(onehotpiece[0:3])
+    filelist = random.choice(filetimes)
+    cur_state = sess.run(init_state)
+    cur_state = sess.run(output_rnn_state, {input_rnn_data : [[filelist[0]]], init_state : cur_state})
+    losssum = 0
+    for j in range(2, len(filelist)):
+        _, cur_state, res = sess.run((operation_rnn, output_rnn_state, loss_rnn), {input_rnn_data : [[filelist[j-1]]], input_rnn_target : [[filelist[j]]], init_state : cur_state})
+        losssum += res
+        print("loss : " + str(res))
 
-    _, _loss = sess.run((operation, loss), {input_data : xbatch, input_target: ybatch, input_time_onehot : onehot_batch})
-    print("epoch : " + str(epoch) + " loss : " + str(_loss))
-    log_file.write("epoch : " + str(epoch) + " loss : " + str(_loss) + "\n")
+    print("epoch : " + str(epoch) + " loss : " + str(losssum / (len(filelist) - 2)))
+    log_file.write("epoch : " + str(epoch) + " loss : " + str(losssum / (len(filelist) - 2)) + "\n")
 
     if epoch % 1000 == 0 :
-        saver.save(sess, "log_rnn_1/log_rnn_" + str(epoch) + ".ckpt")
+        saver.save(sess, "log_rnn_2/log_rnn_" + str(epoch) + ".ckpt")

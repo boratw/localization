@@ -146,7 +146,7 @@ output_unwarp_softmax = tf.compat.v1.nn.softmax(output_unwarp)
 
 output_action = network_loc(input_warpedcam, input_globalmap)
 
-cost_action = tf.reduce_sum(tf.square(tf.reduce_sum(tf.math.multiply(input_action, output_action), axis=1, keepdims=True) - input_qvalue)) * 0.01
+cost_action = tf.reduce_sum(tf.square(tf.reduce_sum(tf.math.multiply(input_action, output_action), axis=1, keepdims=True) - input_qvalue))
 
 
 learning_rate_loc = tf.compat.v1.train.exponential_decay(0.001, global_step, 10, 0.9) 
@@ -164,21 +164,20 @@ restorer.restore(sess, "./log_wp_3/model_wp_2000.ckpt")
 
 saver = tf.compat.v1.train.Saver(max_to_keep=0)
 #saver.restore(sess, "./log_dqn_6/log_dqn_6_100.ckpt")
-log_file = open("log_dqn_1/log_dqn_1.txt", "wt")
+log_file = open("log_dqn_3/log_dqn_3.txt", "wt")
 
 np.set_printoptions(suppress=True)
 np.set_printoptions(precision=8)
 
-for epoch in range(1, 3001):
+for epoch in range(1, 2001):
     history_local = []
     history_global = []
     history_action = []
     history_qvalue = []
 
     for play in range(30) :
-        previous_action = -1
-        previous_advantage = 0
-        realoutput = [0., 0., 0., 0., 0., 0.]
+        prevscore = 0
+        prev_direc = [0., 0., 0.]
         image_path = random.choice(image_path_list)
         cam_image = cv2.imread(image_path + "_cam.png")
         globalmap_image = cv2.imread(image_path + "_map.png")
@@ -222,7 +221,7 @@ for epoch in range(1, 3001):
 
         local_image_norm = cv2.GaussianBlur(warpedcam_list[0], (11, 11), 0)
         local_image = cv2.divide(warpedcam_list[0], local_image_norm + 0.1)
-        blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)
+        blur_local_image = cv2.GaussianBlur(local_image, (31, 31), 0)
         #_, blur_local_image_th = cv2.threshold(blur_local_image,0.3333333,0.3333333,cv2.THRESH_TRUNC)
         #blur_local_image_th = blur_local_image_th * 3
 
@@ -236,11 +235,8 @@ for epoch in range(1, 3001):
         localhistory = []
         globalhistory = []
         actionhistory = []
-        valuehistory = []
         qvaluehistory = []
 
-        prevmaxscore = 0.
-        prevmaxstep = 0
 
         if random.random() > 0.95:
             while True:
@@ -253,12 +249,14 @@ for epoch in range(1, 3001):
         for step in range(20):
             global_image_norm = cv2.GaussianBlur(globalmap_warped_image[384:640, 384:640], (11, 11), 0)
             global_image_normed = cv2.divide(globalmap_warped_image[384:640, 384:640], global_image_norm + 0.1)
-            blur_global_image = cv2.GaussianBlur(global_image_normed, (61, 61), 0)
+            blur_global_image = cv2.GaussianBlur(global_image_normed, (31, 31), 0)
             #_, blur_global_image_th = cv2.threshold(blur_global_image,0.3333333,0.3333333,cv2.THRESH_TRUNC)
             #blur_global_image_th = blur_global_image_th * 3
                 
             score = image_diff(blur_local_image, blur_global_image, blur_local_image_2)
 
+            print("score : ", score)
+            print(ret2)
             global_patch = globalmap_warped_image[256:768, 256:768]
 
 
@@ -269,59 +267,146 @@ for epoch in range(1, 3001):
 
             localhistory.append(warpedcam_list[0])
             globalhistory.append(global_patch)
-            valuehistory.append([score])
 
             ret_output_action = sess.run(output_action, {input_warpedcam:warpedcam_list, input_globalmap:[global_patch]})
             print(ret_output_action)
 
-            maxarg = np.argmax(ret_output_action[0])
-            qvaluehistory.append([score + ret_output_action[0][maxarg]])
+            randv = random.randint(0, 15)
+            if randv > 5:
+                randv = -1
+                
+            maxarg = -1
+            maximum = 0
+            if prev_direc[0] != -1:
+                if ret_output_action[0][0] > maximum:
+                    maximum = ret_output_action[0][0]
+                    maxarg = 0
+            else:
+                if randv == 0:
+                    randv = -1
+            
+            if prev_direc[0] != 1:
+                if ret_output_action[0][1] > maximum:
+                    maximum = ret_output_action[0][1]
+                    maxarg = 1
+            else:
+                if randv == 1:
+                    randv = -1
 
-            if random.random() > 0.7 :
-                maxarg = random.randint(0, 5)
+            if prev_direc[1] != -1:
+                if ret_output_action[0][2] > maximum:
+                    maximum = ret_output_action[0][2]
+                    maxarg = 2
+            else:
+                if randv == 2:
+                    randv = -1
 
-            if maxarg == 0:
-                ret2[0] += 0.1
-            elif maxarg == 1:
-                ret2[0] -= 0.1
-            elif maxarg == 2:
-                ret2[1] += 0.1
-            elif maxarg == 3:
-                ret2[1] -= 0.1
-            elif maxarg == 4:
-                ret2[2] += 0.01
-            elif maxarg == 5:
-                ret2[2] -= 0.01
+            if prev_direc[1] != 1:
+                if ret_output_action[0][3] > maximum:
+                    maximum = ret_output_action[0][3]
+                    maxarg = 3
+            else:
+                if randv == 3:
+                    randv = -1
 
+            if prev_direc[2] != -1:
+                if ret_output_action[0][4] > maximum:
+                    maximum = ret_output_action[0][4]
+                    maxarg = 4
+            else:
+                if randv == 4:
+                    randv = -1
+
+            if prev_direc[2] != 1:
+                if ret_output_action[0][5] > maximum:
+                    maximum = ret_output_action[0][5]
+                    maxarg = 5
+            else:
+                if randv == 5:
+                    randv = -1
+
+            if step == 19:
+                qvaluehistory.append([-1])
+            elif maxarg == -1:
+                qvaluehistory.append([score * 0.99 - prevscore])
+                if step > 15:
+                    actionhistory.append([])
+                    break
+            else:
+                qvaluehistory.append([(score + ret_output_action[0][maxarg]) * 0.99 - prevscore])
+
+            
+            if randv != -1:
+                maxarg = randv
+
+            if maxarg == -1:
+                while True:
+                    maxarg = random.randint(0, 5)
+                    if maxarg == 0:
+                        if prev_direc[0] != -1:
+                            break
+                    elif maxarg == 1:
+                        if prev_direc[0] != 1:
+                            break
+                    elif maxarg == 2:
+                        if prev_direc[1] != -1:
+                            break
+                    elif maxarg == 3:
+                        if prev_direc[1] != 1:
+                            break
+                    elif maxarg == 4:
+                        if prev_direc[2] != -1:
+                            break
+                    elif maxarg == 5:
+                        if prev_direc[2] != 1:
+                            break
+
+            print("maxarg : ", maxarg)
             action = [0., 0., 0., 0., 0., 0.]
             action[maxarg] =  1.0
 
             actionhistory.append(action)
-            
+
+        
+
+            if maxarg == 0:
+                ret2[0] += 0.1
+                if prev_direc[0] == 0:
+                    prev_direc[0] = 1
+            elif maxarg == 1:
+                ret2[0] -= 0.1
+                if prev_direc[0] == 0:
+                    prev_direc[0] = -1
+            elif maxarg == 2:
+                ret2[1] += 0.1
+                if prev_direc[1] == 0:
+                    prev_direc[1] = 1
+            elif maxarg == 3:
+                ret2[1] -= 0.1
+                if prev_direc[1] == 0:
+                    prev_direc[1] = -1
+            elif maxarg == 4:
+                ret2[2] += 0.01
+                if prev_direc[2] == 0:
+                    prev_direc[2] = 1
+            elif maxarg == 5:
+                ret2[2] -= 0.01
+                if prev_direc[2] == 0:
+                    prev_direc[2] = -1
 
             M = getaffinemaxrix(ret2)
             globalmap_warped_image = cv2.warpAffine(globalmap_image, M, (1024, 1024))
 
 
-            print("score : ", score)
-            print(ret2)
-            
-            if prevmaxscore * 1.01 < score :
-                prevmaxscore = score
-                prevmaxstep = step
+            if maxarg == 2 or maxarg == 3:
+                prevscore = score + 0.02
+            else:
+                prevscore = score
 
-        if prevmaxstep < 3:
-            prevmaxstep = 3
-        elif prevmaxstep > 18:
-            prevmaxstep = 18
-        
-        qvaluehistory[prevmaxstep] = valuehistory[prevmaxstep]
-
-        
-        history_local.extend(localhistory[:prevmaxstep])
-        history_global.extend(globalhistory[:prevmaxstep])
-        history_action.extend(actionhistory[:prevmaxstep])
-        history_qvalue.extend(qvaluehistory[1:prevmaxstep+1])
+        history_local.extend(localhistory[:step - 1])
+        history_global.extend(globalhistory[:step - 1])
+        history_action.extend(actionhistory[:step - 1])
+        history_qvalue.extend(qvaluehistory[1:step])
         #if original_score < firstscore : 
         #    history_qvalue.extend([[x - falsemove * 0.01 + (firstscore - original_score) / (firstbreak + 1)] for x in maxvaluehistory[1:step]])
         #else:
@@ -336,8 +421,8 @@ for epoch in range(1, 3001):
         log_file.write("epoch " + str(epoch) + " play " + str(play) + " final score : " + str(score) + "\n")
 
 
-        cv2.imshow("global_map", globalhistory[prevmaxstep])
-        cv2.imshow("global_patch", globalhistory[prevmaxstep][128:384, 128:384])
+        cv2.imshow("global_map", globalhistory[step-1])
+        cv2.imshow("global_patch", globalhistory[step-1][128:384, 128:384])
 
         cv2.waitKey(10)
 
@@ -358,4 +443,4 @@ for epoch in range(1, 3001):
         log_file.write("epoch " + str(epoch) + " play " + str(play) + " cost : " + str(ret2) + "\n")
 
     if epoch % 100 == 0 :
-        saver.save(sess, "log_dqn_1/log_dqn_1_" + str(epoch) + ".ckpt")
+        saver.save(sess, "log_dqn_3/log_dqn_3_" + str(epoch) + ".ckpt")
