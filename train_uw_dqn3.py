@@ -215,11 +215,11 @@ for epoch in range(1, 2001):
 
         ret_output_unwarp_softmax = sess.run(output_unwarp_softmax, {input_cam:cam_image})
         warpedcam_list = ret_output_unwarp_softmax[:, :, :, 1:]
-        cv2.imshow("unwarp_image", warpedcam_list[0])
 
         cv2.imshow("original_patch", globalmap_image[384:640, 384:640])
 
         local_image_orig = cv2.resize(warpedcam_list[0], (512, 512))[128:384, 128:384]
+        cv2.imshow("unwarp_image", local_image_orig)
         local_image_norm = cv2.GaussianBlur(local_image_orig, (11, 11), 0)
         local_image = cv2.divide(local_image_orig, local_image_norm + 0.1)
         blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)

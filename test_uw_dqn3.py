@@ -157,8 +157,9 @@ for image_path in image_path_list:
     cv2.imshow("cam_image", cam_image[0])
     cv2.imshow("unwarp_image", warpedcam_list[0])
 
-    local_image_norm = cv2.GaussianBlur(warpedcam_list[0], (11, 11), 0)
-    local_image = cv2.divide(warpedcam_list[0], local_image_norm + 1.0)
+    local_image_orig = cv2.resize(warpedcam_list[0], (512, 512))[128:384, 128:384]
+    local_image_norm = cv2.GaussianBlur(local_image_orig, (11, 11), 0)
+    local_image = cv2.divide(local_image_orig, local_image_norm + 0.1)
     blur_local_image = cv2.GaussianBlur(local_image, (61, 61), 0)
 
     blur_local_image_2 = cv2.multiply(blur_local_image, blur_local_image)
@@ -178,7 +179,7 @@ for image_path in image_path_list:
         global_patch = globalmap_warped_image[256:768, 256:768]
         cv2.imshow("global_patch", global_patch)
         ret_output_action = sess.run( output_action, {input_warpedcam:warpedcam_list, input_globalmap:[global_patch]})
-        #print(ret_output_action)
+        print(ret_output_action)
 
 
         maxarg = np.argmax(ret_output_action[0])
